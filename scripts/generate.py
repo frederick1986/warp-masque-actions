@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import sys
 
-from warp_generator import ConfigError, generate, write_outputs
+from warp_generator import ConfigError, generate, generate_external, write_outputs
 
 
 def read_json(text, label):
@@ -21,26 +21,30 @@ def main(argv=None):
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--account", type=Path, help="existing Usque JSON file; never registered or modified")
     source.add_argument("--account-env", metavar="NAME", help="read existing account JSON from this environment variable")
+    source.add_argument("--external-only", action="store_true", help="generate standalone external-node providers without any account input")
     parser.add_argument("--settings", type=Path, help="non-secret JSON settings")
     parser.add_argument("--output", type=Path, default=Path("outputs"))
     parser.add_argument("--check", action="store_true", help="validate/build in memory without writing key material")
     args = parser.parse_args(argv)
     try:
-        if args.account:
-            account_text = args.account.read_text(encoding="utf-8")
-        else:
-            account_text = os.environ.get(args.account_env)
-            if not account_text:
-                raise ConfigError("account environment variable is empty")
-        account = read_json(account_text, "account")
         settings = read_json(args.settings.read_text(encoding="utf-8"), "settings") if args.settings else None
-        outputs = generate(account, settings)
+        if args.external_only:
+            outputs = generate_external(settings)
+        else:
+            if args.account:
+                account_text = args.account.read_text(encoding="utf-8")
+            else:
+                account_text = os.environ.get(args.account_env)
+                if not account_text:
+                    raise ConfigError("account environment variable is empty")
+            account = read_json(account_text, "account")
+            outputs = generate(account, settings)
         if not args.check:
             write_outputs(outputs, args.output, [path for path in (args.account, args.settings) if path])
         manifest = json.loads(outputs["manifest.json"])
         # Never print private keys, token values, input JSON, or account addresses.
         verb = "Validated" if args.check else "Generated"
-        print(f"{verb} {manifest['node_count']} nodes; {len(outputs)} files; 0 registrations")
+        print(f"{verb} {manifest['node_count']} inline nodes; {manifest.get('external_provider_count', 0)} external providers; {len(outputs)} files; 0 registrations")
         return 0
     except (ConfigError, OSError, UnicodeError) as error:
         # OSError paths and malformed source data can themselves contain secrets.

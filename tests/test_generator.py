@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from generate import main
 from gen_masque import build
-from warp_generator import (AI, AI_AUTO, AUTO, DIRECT, FALLBACK, FINAL, ConfigError, generate,
+from warp_generator import (AI, AI_AUTO, AUTO, DIRECT, FALLBACK, FINAL, ConfigError, generate, generate_external,
                             write_outputs)
 
 ACCOUNT = json.loads((ROOT / "tests/fixtures/synthetic-account.json").read_text())
@@ -200,6 +200,36 @@ class GeneratorTests(unittest.TestCase):
             output({"formats": ["vless-local"]})
         with self.assertRaises(ConfigError):
             output({"formats": ["singbox-local"], "bridge": {"mixed_port": 1080}})
+
+    def test_combined_external_exports_and_target_rules_are_connected(self):
+        generated = output({"external_providers": {"enabled": True, "countries": ["US", "JP"]},
+                            "chatgpt_route": "FREE", "custom_ip_rules": [{"cidr": "192.0.2.0/24", "target": "US"}]})
+        config = yaml.safe_load(generated["warp-masque.yaml"])
+        self.assertEqual(len(config["proxy-providers"]), 6)
+        self.assertEqual(config["rules"][0], "IP-CIDR,192.0.2.0/24,🇺🇸 US,no-resolve")
+        self.assertIn("DOMAIN-SUFFIX,chatgpt.com,⚡ 免费落地自动", config["rules"])
+        direct = yaml.safe_load(generated["external-direct.yaml"])
+        self.assertEqual(direct["proxies"], [])
+        self.assertNotIn(ACCOUNT["private_key"], generated["external-direct.yaml"])
+        self.assertTrue(all(p["override"]["dialer-proxy"] == "DIRECT" for p in direct["proxy-providers"].values()))
+        manifest = json.loads(generated["manifest.json"])
+        self.assertEqual(manifest["external_provider_count"], 6)
+        self.assertFalse(manifest["external_nodes_materialized"])
+
+    def test_external_only_needs_no_account_and_declares_remote_sources(self):
+        generated = generate_external({"external_providers": {"enabled": True}})
+        self.assertEqual(set(generated), {"external-direct.yaml", "manifest.json"})
+        self.assertFalse(json.loads(generated["manifest.json"])["account_reused"])
+        with patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            self.assertEqual(main(["--external-only", "--settings", str(ROOT / "examples/external-providers.json"), "--check"]), 0)
+        self.assertIn("external providers", stdout.getvalue())
+        with self.assertRaises(ConfigError):
+            generate_external()
+
+    def test_disabled_or_unselected_external_targets_fail(self):
+        for options in ({"chatgpt_route": "FREE"}, {"external_providers": {"enabled": True, "countries": ["US"]}, "chatgpt_route": "JP"}):
+            with self.assertRaises(ConfigError):
+                output(options)
 
     def test_legacy_build_api(self):
         links, text, count = build(ACCOUNT)

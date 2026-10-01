@@ -4,10 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: sample 仅生成不可用测试样例；account 复用已有账号
+        description: sample 是无效账号样例；account 复用账号；external-only 不需要账号
         type: choice
-        options: [sample, account]
+        options: [sample, account, external-only]
         default: sample
+      include_external_nodes:
+        description: 同时生成第三方非 MASQUE 节点配置（客户端运行时下载公开订阅）
+        type: boolean
+        default: true
       confirm_private_artifact:
         description: 已确认私有仓库成员可下载含私钥的配置
         type: boolean
@@ -41,14 +45,26 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - name: Generate nonfunctional sample
         if: inputs.mode == 'sample'
-        run: python scripts/generate.py --account tests/fixtures/synthetic-account.json --settings examples/synthetic.json --output outputs
+        env:
+          INCLUDE_EXTERNAL_NODES: ${{ inputs.include_external_nodes }}
+        run: |
+          SETTINGS=examples/synthetic.json
+          if [ "$INCLUDE_EXTERNAL_NODES" = "true" ]; then SETTINGS=examples/external-providers.json; fi
+          python scripts/generate.py --account tests/fixtures/synthetic-account.json --settings "$SETTINGS" --output outputs
+      - name: Generate external-node configuration without account input
+        if: inputs.mode == 'external-only'
+        run: python scripts/generate.py --external-only --settings examples/external-providers.json --output outputs
       - name: Reuse existing account (no registration)
         if: inputs.mode == 'account' && github.event.repository.private && vars.WARP_GENERATION_ENABLED == 'true' && inputs.confirm_private_artifact
         env:
           WARP_ACCOUNT_JSON: ${{ secrets.WARP_ACCOUNT_JSON }}
-        run: python scripts/generate.py --account-env WARP_ACCOUNT_JSON --settings examples/generator.json --output outputs
+          INCLUDE_EXTERNAL_NODES: ${{ inputs.include_external_nodes }}
+        run: |
+          SETTINGS=examples/generator.json
+          if [ "$INCLUDE_EXTERNAL_NODES" = "true" ]; then SETTINGS=examples/external-providers.json; fi
+          python scripts/generate.py --account-env WARP_ACCOUNT_JSON --settings "$SETTINGS" --output outputs
       - name: Upload generated files
-        if: success() && (inputs.mode == 'sample' || (github.event.repository.private && vars.WARP_GENERATION_ENABLED == 'true' && inputs.confirm_private_artifact))
+        if: success() && (inputs.mode == 'sample' || inputs.mode == 'external-only' || (github.event.repository.private && vars.WARP_GENERATION_ENABLED == 'true' && inputs.confirm_private_artifact))
         uses: actions/upload-artifact@v6
         with:
           name: warp-masque-${{ inputs.mode }}

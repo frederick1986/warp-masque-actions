@@ -1,5 +1,7 @@
 # 使用、导出边界与迁移
 
+可选公开第三方节点见 [external-providers.md](external-providers.md)，独立的网络诊断/手动恢复见 [health-and-recovery.md](health-and-recovery.md)。本页的“离线生成器”仅指 generate.py / gen_masque.py。
+
 ## 一个账号、多种入口
 
 生成分为两件事：已有账号作为输入；离线转换作为输出。生成器没有注册 API，不下载或调用 Usque，也不会创建密钥、UUID 或访问令牌。注册、失效账号修复及真实连通测试是使用者单独执行的步骤。
@@ -43,7 +45,7 @@ JSON 可以只包含需要覆盖的字段。完整默认值见 `examples/generat
 6. `acl4ssr` 保留中国 IP 的 `GEOIP,CN` 直连兜底
 7. 最终 `MATCH` 交给“漏网之鱼”组，默认跟随节点选择组
 
-目标 `WARP` 指向 WARP 自动选择组，`PROXY` 指向主选择组，`AI` 指向 AI 选择组；另有内置 `DIRECT`、`REJECT`。不提供假国家组；US / JP / FREE 等会被拒绝。纯 WARP 不能承诺选择国家。
+目标 `WARP` 指向 WARP 自动选择组，`PROXY` 指向主选择组，`AI` 指向 AI 选择组；另有内置 `DIRECT`、`REJECT`。纯 WARP 不提供假国家组，也不能承诺选择国家。明确启用 external_providers 后，可使用 FREE 及选中的 US / JP 等目标，它们指向独立第三方订阅组；未启用或未选择的目标会被拒绝。
 
 `chatgpt_route` 和 `other_ai_route` 修改的是最终规则，而不是仅改变界面选项。远程 AI 规则统一跟随 `other_ai_route`，明确 ChatGPT 规则排在它们之前。自定义 IP 规则带 `no-resolve`；域名请求尚无目标 IP 时，它们不会强制为该域名查询 DNS。更具体/重叠 CIDR 请自行把优先规则放前面。
 

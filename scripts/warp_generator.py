@@ -14,6 +14,8 @@ import uuid
 
 import yaml
 
+from external_providers import (ExternalProviderError, augment_full_config, direct_only_config,
+                                normalize_provider_settings, provider_targets)
 from masque_defaults import AI_DOMAINS, DEFAULT_SNI, PORTS, RULESETS, V4, V6
 
 SELECT = "🚀 节点选择"
@@ -36,6 +38,7 @@ DEFAULTS = {
     "ai_health_url": None, "health_url": "https://www.gstatic.com/generate_204",
     "health_interval": 300, "formats": ["mihomo", "provider", "shadowrocket"],
     "bridge": {},
+    "external_providers": {},
 }
 
 
@@ -126,6 +129,11 @@ def normalize_settings(settings=None):
     require(isinstance(settings, dict), "settings must be a JSON object")
     require(not set(settings) - set(DEFAULTS), "settings contains unknown fields; see examples/generator.json")
     result = {**DEFAULTS, **settings}
+    try:
+        result["external_providers"] = normalize_provider_settings(result["external_providers"])
+    except ExternalProviderError as error:
+        raise ConfigError(str(error)) from None
+    targets = {**TARGETS, **provider_targets(result["external_providers"])}
     for field, allowed in (("endpoint_source", ("curated", "account")),
                            ("family", ("dual", "ipv4", "ipv6")),
                            ("network", ("quic", "h2")),
@@ -155,20 +163,20 @@ def normalize_settings(settings=None):
     if result["ai_health_url"] is not None:
         validate_url(result["ai_health_url"], "ai_health_url")
     for field in ("chatgpt_route", "other_ai_route"):
-        require(isinstance(result[field], str) and result[field] in TARGETS,
-                f"{field} must be WARP, PROXY, AI, DIRECT or REJECT")
+        require(isinstance(result[field], str) and result[field] in targets,
+                f"{field} must be a built-in target or an explicitly enabled external target")
     require(isinstance(result["custom_ip_rules"], list), "custom_ip_rules must be a list")
     rules = []
     for item in result["custom_ip_rules"]:
         require(isinstance(item, dict) and set(item) == {"cidr", "target"}, "custom_ip_rules entries need cidr and target")
-        require(isinstance(item["target"], str) and item["target"] in TARGETS, "custom_ip_rules target is unsupported")
+        require(isinstance(item["target"], str) and item["target"] in targets, "custom_ip_rules target is unsupported")
         try:
             require(isinstance(item["cidr"], str) and "%" not in item["cidr"], "custom_ip_rules CIDR is invalid")
             network = ipaddress.ip_network(item["cidr"], strict=False)
         except ValueError:
             raise ConfigError("custom_ip_rules CIDR is invalid") from None
         kind = "IP-CIDR6" if network.version == 6 else "IP-CIDR"
-        rules.append(f"{kind},{network},{TARGETS[item['target']]},no-resolve")
+        rules.append(f"{kind},{network},{targets[item['target']]},no-resolve")
     result["custom_ip_rules"] = unique(rules)
     bridge = result["bridge"]
     require(isinstance(bridge, dict) and not set(bridge) - {"socks_port", "mixed_port", "vless_port", "uuid"},
@@ -233,6 +241,7 @@ def build_nodes(account, settings):
 
 
 def full_config(nodes, settings):
+    targets = {**TARGETS, **provider_targets(settings["external_providers"])}
     names = [n["name"] for n in nodes]
     groups = [{"name": SELECT, "type": "select", "proxies": [AUTO, FALLBACK, MANUAL, "DIRECT"]},
               {"name": AUTO, "type": "url-test", "proxies": names, "url": settings["health_url"],
@@ -250,8 +259,8 @@ def full_config(nodes, settings):
     groups.append({"name": AI, "type": "select", "proxies": ai_choices})
     # Explicit CIDR overrides win over both domain and upstream rule sets.
     rules = list(settings["custom_ip_rules"])
-    rules += [f"DOMAIN-SUFFIX,{domain},{TARGETS[settings['chatgpt_route']]}" for domain in CHATGPT_DOMAINS]
-    rules += [f"DOMAIN-SUFFIX,{domain},{TARGETS[settings['other_ai_route']]}"
+    rules += [f"DOMAIN-SUFFIX,{domain},{targets[settings['chatgpt_route']]}" for domain in CHATGPT_DOMAINS]
+    rules += [f"DOMAIN-SUFFIX,{domain},{targets[settings['other_ai_route']]}"
               for domain in unique(AI_DOMAINS) if domain not in CHATGPT_DOMAINS]
     providers = {}
     if settings["ruleset_profile"] == "acl4ssr":
@@ -273,7 +282,7 @@ def full_config(nodes, settings):
             tag = f"rule{index:02d}"
             providers[tag] = {"type": "http", "behavior": "classical", "format": "text",
                               "interval": 86400, "url": url, "path": f"./ruleset/{tag}.list"}
-            target = TARGETS[settings["other_ai_route"]] if group == AI else group
+            target = targets[settings["other_ai_route"]] if group == AI else group
             rules.append(f"RULE-SET,{tag},{target}")
     # No GeoIP database downloads are needed for the minimal profile.
     for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16"):
@@ -291,11 +300,12 @@ def full_config(nodes, settings):
               "proxies": nodes, "proxy-groups": groups, "rules": rules}
     if providers:
         config["rule-providers"] = providers
-    return config
+    return augment_full_config(config, settings["external_providers"])
 
 
-def yaml_text(value):
-    return "# Generated offline; contains account key material. Keep private.\n" + yaml.safe_dump(
+def yaml_text(value, sensitive=True):
+    notice = "contains account key material. Keep private." if sensitive else "external providers; no WARP account keys."
+    return f"# Generated offline; {notice}\n" + yaml.safe_dump(
         value, allow_unicode=True, sort_keys=False, width=120)
 
 
@@ -334,13 +344,32 @@ def generate(account, options=None):
         outputs["warp-masque-provider.yaml"] = yaml_text({"proxies": nodes})
     if "shadowrocket" in settings["formats"]:
         outputs["warp-masque-shadowrocket.txt"] = "\n".join(shadowrocket_links(nodes, settings)) + "\n"
+    if settings["external_providers"]["enabled"]:
+        outputs["external-direct.yaml"] = yaml_text(direct_only_config(settings["external_providers"]), sensitive=False)
     for format_name, file_name, vless in (("singbox-local", "sing-box-usque-local.json", False),
                                           ("vless-local", "sing-box-vless-local.json", True)):
         if format_name in settings["formats"]:
             outputs[file_name] = json.dumps(local_bridge(settings, vless), indent=2) + "\n"
     outputs["manifest.json"] = json.dumps({"schema_version": 1, "node_count": len(nodes),
         "formats": settings["formats"], "files": list(outputs), "account_reused": True,
-        "registered_accounts": 0, "live_connectivity_tested": False}, indent=2) + "\n"
+        "registered_accounts": 0, "live_connectivity_tested": False,
+        "external_provider_count": 3 * len(settings["external_providers"]["countries"]) if settings["external_providers"]["enabled"] else 0,
+        "external_nodes_materialized": False}, indent=2) + "\n"
+    return outputs
+
+
+def generate_external(options=None):
+    """Generate a standalone external-provider config without reading an account."""
+    settings = normalize_settings(options)
+    try:
+        config = direct_only_config(settings["external_providers"])
+    except ExternalProviderError as error:
+        raise ConfigError(str(error)) from None
+    outputs = {"external-direct.yaml": yaml_text(config, sensitive=False)}
+    outputs["manifest.json"] = json.dumps({"schema_version": 1, "node_count": 0,
+        "formats": ["external-direct"], "files": list(outputs), "account_reused": False,
+        "registered_accounts": 0, "live_connectivity_tested": False,
+        "external_provider_count": len(config["proxy-providers"]), "external_nodes_materialized": False}, indent=2) + "\n"
     return outputs
 
 
