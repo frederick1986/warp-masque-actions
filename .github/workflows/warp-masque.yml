@@ -3,15 +3,17 @@ name: 生成 WARP MASQUE 配置
 on:
   workflow_dispatch:
     inputs:
-      device_name:
-        description: 设备名（WARP 后台显示用）
-        required: false
-        default: gh-actions
-      retention_days:
-        description: artifact 保留天数
-        required: false
-        default: '7'
+      mode:
+        description: sample 仅生成不可用测试样例；account 复用已有账号
+        type: choice
+        options: [sample, account]
+        default: sample
+      confirm_private_artifact:
+        description: 已确认私有仓库成员可下载含私钥的配置
+        type: boolean
+        default: false
 
+# No repository writes, registration, deployment, schedule, or automatic commits.
 permissions:
   contents: read
 
@@ -19,63 +21,37 @@ jobs:
   generate:
     runs-on: ubuntu-latest
     steps:
+      - name: Require private repository and explicit account setup
+        if: inputs.mode == 'account'
+        env:
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+          GENERATION_ENABLED: ${{ vars.WARP_GENERATION_ENABLED }}
+          CONFIRMED: ${{ inputs.confirm_private_artifact }}
+        run: |
+          if [ "$REPOSITORY_PRIVATE" != "true" ] || [ "$GENERATION_ENABLED" != "true" ] || [ "$CONFIRMED" != "true" ]; then
+            echo "::error::Account generation requires a private repository, WARP_GENERATION_ENABLED=true, and artifact confirmation."
+            exit 1
+          fi
       - uses: actions/checkout@v6
-
-      - name: 下载 usque
-        run: |
-          set -euo pipefail
-          VER=$(curl -sL https://api.github.com/repos/Diniboy1123/usque/releases/latest \
-                | jq -r '.tag_name' | sed 's/^v//')
-          echo "usque 版本 $VER"
-          curl -sL -o usque.zip \
-            "https://github.com/Diniboy1123/usque/releases/download/v${VER}/usque_${VER}_linux_amd64.zip"
-          unzip -oq usque.zip
-          chmod +x usque
-          # 没有 config.json 时 usque version 会先打一条 error，不影响结果
-          ./usque version 2>/dev/null | grep -i version || true
-
-      - name: 注册设备并生成密钥
-        run: |
-          set -euo pipefail
-          ./usque register -a -n "${{ github.event.inputs.device_name || 'gh-actions' }}"
-          test -s config.json
-          # 只打印非敏感字段，密钥不进日志
-          python3 - <<'PY'
-          import json
-          c = json.load(open("config.json"))
-          print("endpoint_v4 =", c["endpoint_v4"])
-          print("endpoint_v6 =", c["endpoint_v6"])
-          print("内网地址 =", c["ipv4"], "/", c["ipv6"])
-          PY
-
-      - name: 生成 mihomo 配置
-        run: python3 scripts/gen_masque.py config.json dist
-
-      - name: 校验配置可加载
-        run: |
-          set -euo pipefail
-          URL=$(curl -sL https://api.github.com/repos/MetaCubeX/mihomo/releases \
-                | grep -o 'https://[^"]*mihomo-linux-amd64-alpha[^"]*\.gz' | head -1)
-          curl -sL -o mihomo.gz "$URL"
-          gunzip -f mihomo.gz
-          chmod +x mihomo
-          mkdir -p check
-          cp dist/warp-masque.yaml check/config.yaml
-          # -t 只做配置解析校验，不起服务
-          ./mihomo -t -d check
-          echo "配置校验通过"
-
-      - name: 打包凭据与配置
-        run: |
-          cp config.json dist/usque-config.json
-          test -s dist/warp-masque.yaml
-          test -s dist/warp-masque-shadowrocket.txt
-          ls -l dist
-
-      - name: 上传 artifact
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - name: Generate nonfunctional sample
+        if: inputs.mode == 'sample'
+        run: python scripts/generate.py --account tests/fixtures/synthetic-account.json --settings examples/synthetic.json --output outputs
+      - name: Reuse existing account (no registration)
+        if: inputs.mode == 'account' && github.event.repository.private && vars.WARP_GENERATION_ENABLED == 'true' && inputs.confirm_private_artifact
+        env:
+          WARP_ACCOUNT_JSON: ${{ secrets.WARP_ACCOUNT_JSON }}
+        run: python scripts/generate.py --account-env WARP_ACCOUNT_JSON --settings examples/generator.json --output outputs
+      - name: Upload generated files
+        if: success() && (inputs.mode == 'sample' || (github.event.repository.private && vars.WARP_GENERATION_ENABLED == 'true' && inputs.confirm_private_artifact))
         uses: actions/upload-artifact@v6
         with:
-          name: warp-masque-config
-          path: dist/
-          retention-days: ${{ github.event.inputs.retention_days || 7 }}
+          name: warp-masque-${{ inputs.mode }}
+          path: outputs/
+          retention-days: 1
           if-no-files-found: error

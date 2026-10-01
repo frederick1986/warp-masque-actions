@@ -1,0 +1,5 @@
+{
+  "endpoint_source": "account",
+  "ports": [443, 8443],
+  "ruleset_profile": "minimal"
+}

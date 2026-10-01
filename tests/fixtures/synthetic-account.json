@@ -1,0 +1,13 @@
+{
+  "_notice": "SYNTHETIC INVALID KEY MATERIAL. Not registered, cannot connect.",
+  "private_key": "VEVTVF9PTkxZX05PVF9BX1JFQUxfUFJJVkFURV9LRVk=",
+  "endpoint_pub_key": "VEVTVF9PTkxZX05PVF9BX1JFQUxfUFVCTElDX0tFWQ==",
+  "endpoint_v4": "192.0.2.1",
+  "endpoint_v6": "2001:db8::1",
+  "endpoint_h2_v4": "192.0.2.2",
+  "endpoint_h2_v6": "2001:db8::2",
+  "ipv4": "192.0.2.20",
+  "ipv6": "2001:db8::20",
+  "id": "TEST-ONLY-DO-NOT-EXPORT",
+  "access_token": "TEST-ONLY-DO-NOT-EXPORT"
+}
