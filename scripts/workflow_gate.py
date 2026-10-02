@@ -13,7 +13,7 @@ def check_gate(env):
         raise GateError("Use a new Run workflow request; automatic triggers and re-runs are disabled.")
     mode = env.get("GENERATION_MODE")
     destination = env.get("OUTPUT_DESTINATION")
-    if mode not in {"sample", "account", "external-only"} or destination not in {"artifact", "repository"}:
+    if mode not in {"sample", "account"} or destination not in {"artifact", "repository"}:
         raise GateError("Choose a supported generation mode and output destination.")
     if destination == "repository":
         if env.get("GITHUB_REF_TYPE") != "branch" or env.get("CONFIRM_PUBLISH_OUTPUTS") != "true":

@@ -13,10 +13,11 @@ import subprocess
 import sys
 import tempfile
 
-ALLOWED_FILES = frozenset({
-    "manifest.json", "warp-masque.yaml", "warp-masque-provider.yaml",
-    "warp-masque-shadowrocket.txt", "external-direct.yaml",
-    "sing-box-usque-local.json", "sing-box-vless-local.json",
+ALLOWED_FILES = frozenset({"manifest.json", "masque.yaml", "usque-custom-pro.yaml", "combined.yaml"})
+# These older outputs may be removed during migration, never newly published.
+MANAGED_FILES = ALLOWED_FILES | frozenset({
+    "warp-masque.yaml", "warp-masque-provider.yaml", "warp-masque-shadowrocket.txt",
+    "external-direct.yaml", "external.yaml", "sing-box-usque-local.json", "sing-box-vless-local.json",
 })
 MAX_FILE_BYTES = 8 * 1024 * 1024
 
@@ -80,7 +81,7 @@ def target_files(repository, commit):
         if not entry:
             continue
         metadata, path = entry.split(b"\t", 1)
-        if metadata.split(b" ", 2)[:2] != [b"100644", b"blob"] or path not in {f"outputs/{name}".encode() for name in ALLOWED_FILES}:
+        if metadata.split(b" ", 2)[:2] != [b"100644", b"blob"] or path not in {f"outputs/{name}".encode() for name in MANAGED_FILES}:
             raise PublicationError("The target outputs directory contains a non-allowlisted path or file mode.")
         paths.add(path.decode("ascii"))
     return paths

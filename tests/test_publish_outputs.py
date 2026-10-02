@@ -21,17 +21,13 @@ from publish_outputs import ALLOWED_FILES, PublicationError, publish_outputs, va
 from workflow_gate import GateError, check_gate
 
 GIT_RUN = subprocess.run
-EXPECTED_FILES = {
-    "manifest.json", "warp-masque.yaml", "warp-masque-provider.yaml",
-    "warp-masque-shadowrocket.txt", "external-direct.yaml",
-    "sing-box-usque-local.json", "sing-box-vless-local.json",
-}
+EXPECTED_FILES = {"manifest.json", "masque.yaml", "usque-custom-pro.yaml", "combined.yaml"}
 SYNTHETIC_SECRET = "TEST_ONLY_NEVER_A_REAL_ACCOUNT_TOKEN"
 
 
 def write_bundle(directory, files=None):
     """Make an intentionally inert output bundle, including its exact manifest."""
-    files = {"warp-masque.yaml": b"proxies: []\n"} if files is None else files
+    files = {"masque.yaml": b"proxies: []\n"} if files is None else files
     directory.mkdir(parents=True, exist_ok=True)
     data = {name: content.encode() if isinstance(content, str) else content
             for name, content in files.items()}
@@ -70,15 +66,17 @@ class OutputValidationTests(unittest.TestCase):
         from warp_generator import generate, write_outputs
 
         account = json.loads((ROOT / "tests/fixtures/synthetic-account.json").read_text())
-        generated = generate(account, {"endpoint_source": "account", "ports": [443],
-                                       "ruleset_profile": "minimal"})
+        legacy = generate(account, {"endpoint_source": "account", "ports": [443],
+                                    "ruleset_profile": "minimal"})
+        generated = {"masque.yaml": legacy["warp-masque.yaml"],
+                     "manifest.json": json.dumps({"schema_version": 1, "files": ["masque.yaml"]})}
         write_outputs(generated, self.source)
         validated = validate_outputs(self.source)
         self.assertEqual(validated, {name: value.encode() for name, value in generated.items()})
         self.assertNotIn(b"TEST-ONLY-DO-NOT-EXPORT", b"".join(validated.values()))
 
     def test_empty_oversize_and_manifest_only_bundles_are_rejected(self):
-        path = self.source / "warp-masque.yaml"
+        path = self.source / "masque.yaml"
         for size in (0, publisher.MAX_FILE_BYTES + 1):
             with self.subTest(size=size):
                 with path.open("wb") as handle:
@@ -92,7 +90,8 @@ class OutputValidationTests(unittest.TestCase):
 
     def test_unexpected_files_including_raw_credentials_are_rejected(self):
         for filename in ("account.json", "usque-config.json", "token.txt", "health.json",
-                         ".env", ".gitignore", "warp-masque.yaml.bak", "config.yaml"):
+                         ".env", ".gitignore", "masque.yaml.bak", "config.yaml",
+                         "external.yaml", "external-direct.yaml", "warp-masque.yaml"):
             with self.subTest(filename=filename):
                 target = self.source / filename
                 target.write_text(SYNTHETIC_SECRET)
@@ -127,17 +126,17 @@ class OutputValidationTests(unittest.TestCase):
     def test_schema_version_must_be_integer_one(self):
         for version in (None, False, True, 0, 2, "1", 1.0, [], {}):
             with self.subTest(version=version):
-                self.manifest({"schema_version": version, "files": ["warp-masque.yaml"]})
+                self.manifest({"schema_version": version, "files": ["masque.yaml"]})
                 with self.assertRaises(PublicationError):
                     validate_outputs(self.source)
-        self.manifest({"files": ["warp-masque.yaml"]})
+        self.manifest({"files": ["masque.yaml"]})
         with self.assertRaises(PublicationError):
             validate_outputs(self.source)
 
     def test_manifest_files_must_be_unique_exact_filename_list(self):
-        for files in (None, {}, "warp-masque.yaml", [], ["warp-masque.yaml"] * 2,
-                      ["manifest.json", "warp-masque.yaml"], ["external-direct.yaml"],
-                      ["warp-masque.yaml", "external-direct.yaml"], [1], [None], [["warp-masque.yaml"]]):
+        for files in (None, {}, "masque.yaml", [], ["masque.yaml"] * 2,
+                      ["manifest.json", "masque.yaml"], ["combined.yaml"],
+                      ["masque.yaml", "combined.yaml"], [1], [None], [["masque.yaml"]]):
             with self.subTest(files=files):
                 self.manifest({"schema_version": 1, "files": files})
                 with self.assertRaises(PublicationError):
@@ -147,9 +146,9 @@ class OutputValidationTests(unittest.TestCase):
             validate_outputs(self.source)
 
     def test_manifest_cannot_reference_traversal_absolute_or_nested_paths(self):
-        for name in ("../account.json", "/tmp/account.json", "outputs/warp-masque.yaml",
-                     "./warp-masque.yaml", "..\\account.json", "warp-masque.yaml\x00",
-                     "WARP-MASQUE.YAML", "warp-masque.yaml\n"):
+        for name in ("../account.json", "/tmp/account.json", "outputs/masque.yaml",
+                     "./masque.yaml", "..\\account.json", "masque.yaml\x00",
+                     "WARP-MASQUE.YAML", "masque.yaml\n"):
             with self.subTest(name=name):
                 self.manifest({"schema_version": 1, "files": [name]})
                 with self.assertRaises(PublicationError):
@@ -163,8 +162,8 @@ class OutputValidationTests(unittest.TestCase):
             validate_outputs(self.source)
 
     def test_allowlisted_directory_is_rejected(self):
-        (self.source / "warp-masque.yaml").unlink()
-        (self.source / "warp-masque.yaml").mkdir()
+        (self.source / "masque.yaml").unlink()
+        (self.source / "masque.yaml").mkdir()
         with self.assertRaises(PublicationError):
             validate_outputs(self.source)
 
@@ -181,7 +180,7 @@ class OutputValidationTests(unittest.TestCase):
             validate_outputs(linked / "generated")
 
     def test_symlinked_output_and_manifest_are_rejected(self):
-        for name in ("warp-masque.yaml", "manifest.json"):
+        for name in ("masque.yaml", "manifest.json"):
             with self.subTest(name=name):
                 original = self.bundle[name]
                 outside = self.root / (name + ".outside")
@@ -196,12 +195,12 @@ class OutputValidationTests(unittest.TestCase):
                 target.write_bytes(original)
 
     def test_broken_symlink_is_rejected(self):
-        (self.source / "external-direct.yaml").symlink_to(self.root / "missing")
+        (self.source / "combined.yaml").symlink_to(self.root / "missing")
         with self.assertRaises(PublicationError):
             validate_outputs(self.source)
 
     def test_hardlinked_output_and_manifest_are_rejected(self):
-        for name in ("warp-masque.yaml", "manifest.json"):
+        for name in ("masque.yaml", "manifest.json"):
             with self.subTest(name=name):
                 link = self.root / (name + ".hardlink")
                 os.link(self.source / name, link)
@@ -211,8 +210,8 @@ class OutputValidationTests(unittest.TestCase):
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "requires FIFO support")
     def test_special_file_is_rejected_without_reading_it(self):
-        (self.source / "warp-masque.yaml").unlink()
-        os.mkfifo(self.source / "warp-masque.yaml")
+        (self.source / "masque.yaml").unlink()
+        os.mkfifo(self.source / "masque.yaml")
         with self.assertRaises(PublicationError):
             validate_outputs(self.source)
 
@@ -227,13 +226,13 @@ class WorkflowGateTests(unittest.TestCase):
             "GITHUB_RUN_ATTEMPT": "1", **overrides,
         }
 
-    def test_sample_and_external_artifacts_are_manual_and_need_no_secrets(self):
-        for mode in ("sample", "external-only"):
+    def test_sample_artifact_is_manual_and_needs_no_secrets(self):
+        for mode in ("sample",):
             with self.subTest(mode=mode):
                 check_gate(self.env(GENERATION_MODE=mode))
 
     def test_every_mode_and_destination_rejects_automatic_events_and_reruns(self):
-        for mode in ("sample", "account", "external-only"):
+        for mode in ("sample", "account"):
             for destination in ("artifact", "repository"):
                 for override in (
                     {"GITHUB_EVENT_NAME": event} for event in
@@ -254,7 +253,7 @@ class WorkflowGateTests(unittest.TestCase):
                                                 GITHUB_RUN_ATTEMPT=attempt))
 
     def test_repository_publication_requires_exact_confirmation_and_branch(self):
-        for mode in ("sample", "account", "external-only"):
+        for mode in ("sample", "account"):
             for confirmation in ("false", "", "True", "1", "yes"):
                 with self.subTest(mode=mode, confirmation=confirmation):
                     with self.assertRaises(GateError):
@@ -296,7 +295,7 @@ class WorkflowGateTests(unittest.TestCase):
                                 CONFIRM_PRIVATE_ARTIFACT="true"))
 
     def test_unknown_or_missing_mode_and_destination_fail_closed(self):
-        for mode in ("", "live", "recover", "Account"):
+        for mode in ("", "live", "recover", "Account", "external-only"):
             with self.subTest(mode=mode), self.assertRaises(GateError):
                 check_gate(self.env(GENERATION_MODE=mode))
         for destination in ("", "public", "both", "Repository"):
@@ -420,7 +419,7 @@ class LocalGitPublicationTests(unittest.TestCase):
     def assert_only_outputs_changed(self, commit):
         changed = self.git(self.origin, "diff-tree", "--no-commit-id", "--name-only", "-r", commit)
         self.assertTrue(changed)
-        self.assertLessEqual(set(changed.splitlines()), {f"outputs/{name}" for name in EXPECTED_FILES})
+        self.assertLessEqual(set(changed.splitlines()), {f"outputs/{name}" for name in publisher.MANAGED_FILES})
 
     def test_publish_commits_only_allowlisted_files_and_returns_remote_sha(self):
         original_tip = self.tip()
@@ -470,8 +469,8 @@ class LocalGitPublicationTests(unittest.TestCase):
 
     def test_stale_managed_files_are_removed_but_other_source_is_preserved(self):
         previous = write_bundle(self.peer / "outputs", {
-            "warp-masque.yaml": b"old synthetic output\n",
-            "sing-box-usque-local.json": b"{}\n", "external-direct.yaml": b"proxies: []\n",
+            "masque.yaml": b"old synthetic output\n",
+            "sing-box-usque-local.json": b"{}\n", "combined.yaml": b"proxies: []\n",
         })
         self.git(self.peer, "add", "outputs")
         self.git(self.peer, "commit", "-m", "Previous managed outputs")
@@ -491,7 +490,7 @@ class LocalGitPublicationTests(unittest.TestCase):
         self.assertEqual(self.remote_bytes("outputs/account.json"), SYNTHETIC_SECRET.encode())
 
     def test_nested_remote_output_directory_is_rejected(self):
-        before = self.commit_peer({"outputs/warp-masque.yaml/account.json": SYNTHETIC_SECRET})
+        before = self.commit_peer({"outputs/masque.yaml/account.json": SYNTHETIC_SECRET})
         with self.assertRaises(PublicationError):
             publish_outputs(self.source, self.client, "main")
         self.assertEqual(self.tip(), before)
@@ -504,7 +503,7 @@ class LocalGitPublicationTests(unittest.TestCase):
 
     def test_executable_remote_output_is_rejected(self):
         (self.peer / "outputs").mkdir()
-        output = self.peer / "outputs/warp-masque.yaml"
+        output = self.peer / "outputs/masque.yaml"
         output.write_text("synthetic executable mode\n")
         output.chmod(0o755)
         self.git(self.peer, "add", "outputs")
@@ -528,7 +527,7 @@ class LocalGitPublicationTests(unittest.TestCase):
 
     def test_symlinked_remote_managed_file_is_rejected(self):
         (self.peer / "outputs").mkdir()
-        (self.peer / "outputs/warp-masque.yaml").symlink_to("../README.md")
+        (self.peer / "outputs/masque.yaml").symlink_to("../README.md")
         self.git(self.peer, "add", "outputs")
         self.git(self.peer, "commit", "-m", "Unsafe managed output")
         self.git(self.peer, "push", "origin", "main")
@@ -604,7 +603,7 @@ class LocalGitPublicationTests(unittest.TestCase):
         self.git(self.client, "config", "filter.synthetic-danger.required", "true")
         publish_outputs(self.source, self.client, "main")
         self.assertFalse(marker.exists())
-        self.assertEqual(self.remote_bytes("outputs/warp-masque.yaml"), self.bundle["warp-masque.yaml"])
+        self.assertEqual(self.remote_bytes("outputs/masque.yaml"), self.bundle["masque.yaml"])
 
     def test_local_git_hooks_cannot_execute_during_publication(self):
         marker = self.root / "hook-was-run"

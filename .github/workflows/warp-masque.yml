@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: sample 是无效账号样例；account 复用账号；external-only 不需要账号
+        description: sample 是无效账号样例；account 复用已有 WARP 账号
         type: choice
-        options: [sample, account, external-only]
+        options: [sample, account]
         default: sample
       include_external_nodes:
-        description: 同时生成第三方非 MASQUE 节点配置（客户端运行时下载公开订阅）
+        description: 下载 donor 第三方节点，生成纯 WARP、原项目中转、合并三份完整配置
         type: boolean
         default: true
       output_destination:
@@ -61,21 +61,18 @@ jobs:
         env:
           INCLUDE_EXTERNAL_NODES: ${{ inputs.include_external_nodes }}
         run: |
-          SETTINGS=examples/synthetic.json
-          if [ "$INCLUDE_EXTERNAL_NODES" = "true" ]; then SETTINGS=examples/external-providers.json; fi
-          python scripts/generate.py --account tests/fixtures/synthetic-account.json --settings "$SETTINGS" --output "$RUNNER_TEMP/warp-exports"
-      - name: Generate external-node configuration without account input
-        if: inputs.mode == 'external-only'
-        run: python scripts/generate.py --external-only --settings examples/external-providers.json --output "$RUNNER_TEMP/warp-exports"
+          EXTRA=()
+          if [ "$INCLUDE_EXTERNAL_NODES" != "true" ]; then EXTRA+=(--no-external); fi
+          python scripts/generate_bundle.py --account tests/fixtures/synthetic-account.json --settings examples/external-providers.json --output "$RUNNER_TEMP/warp-exports" "${EXTRA[@]}"
       - name: Reuse existing account (no registration)
         if: inputs.mode == 'account'
         env:
           WARP_ACCOUNT_JSON: ${{ secrets.WARP_ACCOUNT_JSON }}
           INCLUDE_EXTERNAL_NODES: ${{ inputs.include_external_nodes }}
         run: |
-          SETTINGS=examples/generator.json
-          if [ "$INCLUDE_EXTERNAL_NODES" = "true" ]; then SETTINGS=examples/external-providers.json; fi
-          python scripts/generate.py --account-env WARP_ACCOUNT_JSON --settings "$SETTINGS" --output "$RUNNER_TEMP/warp-exports"
+          EXTRA=()
+          if [ "$INCLUDE_EXTERNAL_NODES" != "true" ]; then EXTRA+=(--no-external); fi
+          python scripts/generate_bundle.py --account-env WARP_ACCOUNT_JSON --settings examples/external-providers.json --output "$RUNNER_TEMP/warp-exports" "${EXTRA[@]}"
       - name: Validate exact generated-file allowlist before any upload
         run: |
           PYTHONPATH=scripts python -c 'import os; from pathlib import Path; from publish_outputs import validate_outputs; validate_outputs(Path(os.environ["RUNNER_TEMP"]) / "warp-exports")'

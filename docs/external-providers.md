@@ -1,10 +1,12 @@
 # 外部 Clash-format 节点与独立直连配置
 
+> 本页主要描述兼容的离线 provider 接口。当前 WARP Actions 使用 generate_bundle.py 下载并内嵌节点，发布 masque.yaml、usque-custom-pro.yaml、combined.yaml；两份含第三方的配置都强制 WARP 中转。纯第三方聚合不在新发布白名单中，旧 CLI 不会自动联网。
+
 这部分移植 donor `usque-custom-pro` 的 `pages/app.js` 中真实的免费落地 provider 路径：`freeProviderUrl`、三组健康检查、按国家选择、服务范围和可选 WARP 链式连接。它并不是把 MASQUE 节点改名为 VLESS，也不依赖本地 SOCKS/VLESS 桥接。
 
 ## 明确启用
 
-直接运行 CLI、不提供设置覆盖时，仍默认生成 WARP-only 配置。手动运行 GitHub Actions 时，`include_external_nodes` 复选框默认启用，会同时生成 MASQUE 与外部节点配置；取消勾选可保留 WARP-only。CLI 可以在生成设置里明确加入：
+直接运行 CLI、不提供设置覆盖时，仍默认生成 WARP-only 配置。新版手动 Actions 的 `include_external_nodes` 默认启用，但会生成 WARP 中转的内嵌快照，见 README；以下仅描述旧 CLI provider 模式。CLI 可以在生成设置里明确加入：
 
 ```json
 {
@@ -42,7 +44,7 @@ python scripts/generate.py --external-only \
 - `scope`：`ai-streaming` / `ai-only` / `streaming-only` / `all-foreign`；控制完整配置里哪些服务选择组优先使用外部节点，不会覆盖用户已经明确写出的 DIRECT、WARP 或其他路由规则
 - `protocol_mode`：默认 `stable`，沿用 donor 排除 `hysteria2|tuic|wireguard|http|https|socks4|socks5`；`all` 允许其他内核支持的类型。两个模式都额外排除 `masque`
 
-与 donor 推荐预设不同，CLI 基础设置默认关闭第三方 provider，手动 Actions 的外部节点选项则默认启用。开启后默认直接连接第三方节点；需要 WARP 链时明确设置 `use_warp: true`。
+旧 CLI 基础设置默认关闭第三方 provider；其示例默认直接连接第三方节点，需要链时设置 `use_warp: true`。新版 Actions bundle 强制 WARP 链，不采用这里的 DIRECT 默认值。
 
 ## 来源与国家分组
 

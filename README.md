@@ -2,6 +2,8 @@
 
 把已有 Usque / WARP 账号转换成 `outputs/` 目录里的客户端配置。默认使用原生 MASQUE；不需要网页、Worker、服务器部署，也不会自动注册新账号。
 
+当前手动 Actions 保存三份可独立导入的完整 YAML：`masque.yaml`、`usque-custom-pro.yaml`、`combined.yaml`。后两份都通过 WARP 中转第三方节点，不在此仓库发布纯第三方直连聚合文件。
+
 本次整合以 `warp-masque-actions` 为主，吸收 `usque-custom-pro` 的可配置入口、DNS / MTU、AI / IP 分流和多格式导出思路，集中为一个 Python 生成核心。
 
 ## 直接生成到目录
@@ -24,17 +26,22 @@ python scripts/generate.py --account /安全目录/usque-config.json --settings 
 
 输出含私钥，默认请保存在私有位置。生成器不复制原始账号文件、设备 ID 或 access token，CLI 本身不提交 Git；下面的手动 Actions 发布选项会在逐次确认后提交生成文件。POSIX 系统上输出目录为 `0700`，文件为 `0600`；Windows 请另外检查访问权限。
 
-## 同时输出非 MASQUE 节点配置
+## 三份配置：纯 WARP、原项目中转、合并选择
 
-使用 `examples/external-providers.json`，可同时输出含 MASQUE + 第三方节点 provider 的 `warp-masque.yaml` 和独立的 `external-direct.yaml`。后者不依赖 WARP 账号，也不依赖本地 Usque 桥接。
+手动 Actions 使用新的 `scripts/generate_bundle.py`，默认下载 donor `usque-custom-pro` 所用的公开国家源（Au1rxx/free-vpn-subscriptions，US/JP/SG），过滤、去重，将实际节点写进配置：
 
-```sh
-python scripts/generate.py --account /安全目录/usque-config.json --settings examples/external-providers.json --output outputs
-# 只生成独立的第三方节点配置，无需账号：
-python scripts/generate.py --external-only --settings examples/external-providers.json --output outputs
-```
+- `outputs/masque.yaml`：只含 WARP MASQUE 节点，保留完整选择组和规则
+- `outputs/usque-custom-pro.yaml`：按原项目中转用途，以第三方链为主出口；包含必要 WARP 节点，每个第三方节点通过 `dialer-proxy: WARP中转` 拨号，形成“设备 → WARP → 第三方节点 → 网站”
+- `outputs/combined.yaml`：同时提供纯 WARP 出口与 WARP 中转第三方出口，主选择组可切换两类出口
+- `outputs/manifest.json`：辅助清单、节点数、来源与过滤计数，不包含原始账号或节点凭据
 
-这部分复用 donor 的 US/JP/SG 等国家公开订阅能力。生成时不下载实际节点，客户端运行时才拉取；不保证来源中的每个节点可用或服务解锁。动态 provider 显式排除 MASQUE，独立配置强制直接连接第三方节点；目标是支持这些 provider 字段的 Mihomo 内核。详见 [第三方节点说明](docs/external-providers.md)。
+三份 YAML 各有自己的节点、组和规则，单独导入即可，不依赖彼此；客户端不再运行时下载第三方节点订阅，ACL4SSR 规则集仍按原设置下载。中转由你本机的 Mihomo 执行，Actions 只下载公开源、生成和保存配置，不托管中转服务。后两份也需要支持 MASQUE 的 Mihomo。
+
+专用 `WARP中转` 组只选择纯 WARP 节点，避免指回外部节点形成循环。原有明确直连规则、国内/局域网和直连优先服务保持语义；保证的是第三方节点的拨号链，不代表所有网站都强制经过代理。纯第三方聚合用途应留在独立的 FreeNodes 项目，本次不修改那个项目。
+
+任一所选来源下载失败、超限、YAML 非法或过滤后没有可用结构的节点都会停止，不提交半份或占位结果。结构可解析不等于在线或服务解锁；再次手动运行才会刷新内嵌快照。第三方节点可能随时失效，WARP 链也不会让第三方运营者变得可信。
+
+不需要第三方节点时取消 Actions 的 `include_external_nodes`，仅保存 masque.yaml 和 manifest。原来的离线 `generate.py` / `gen_masque.py` 接口仍保留兼容，不自动联网；旧 provider 引用等格式见 [兼容接口与第三方来源](docs/external-providers.md)。新发布流程只接受这里的三份 YAML 与 manifest，不接受纯 external 导出。
 
 ## 修改参数
 
@@ -53,33 +60,24 @@ python scripts/generate.py --external-only --settings examples/external-provider
 
 ## GitHub Actions：下载或手动提交 outputs
 
-`生成 WARP MASQUE 配置` 仅由你手动点 **Run workflow** 触发，没有定时任务。默认 `output_destination=artifact`，只提供保留 1 天的下载；选择 `repository` 才会生成并提交到本次选中分支的 `outputs/`。
+`生成 WARP MASQUE 配置` 仅由你手动点 **Run workflow** 触发，没有定时任务。默认 `output_destination=artifact`，提供保留 1 天的下载；选择 `repository` 才提交到本次选中分支的 `outputs/`。
 
-**公开风险：真实 MASQUE 完整配置、provider 和 Shadowrocket 链接含同一个账号的私钥。提交到公开仓库后，任何人都可能复制和使用；Git 历史、fork、下载和缓存不能保证清除。删除文件或改回 artifact 不会撤销已公开的密钥。** 不接受这点时，请使用私有仓库的 artifact 模式。
+**公开风险：三份真实配置都含 WARP 私钥。公开仓库中的任何人都可能复制和使用；Git 历史、fork、下载和缓存无法保证清除。删除文件或改回 artifact 不会撤销已公开的密钥。** 不接受这点时，使用私有仓库的 artifact 模式。
 
-1. 先确认运行的分支已包含本版工作流。此改动在 PR 中时，默认 `main` 仍可能是旧注册流程，不能把旧按钮当作新流程；合并与运行是两次独立操作
-2. 真实账号需由你自己在 GitHub 配置已有账号的 Actions Secret `WARP_ACCOUNT_JSON`，以及 Actions Variable `WARP_GENERATION_ENABLED=true`。不创建新账号，不把 JSON 发到聊天、Issue 或源码中
-3. 打开 Actions → `生成 WARP MASQUE 配置` → Run workflow，选择含新版代码的目标分支
-4. `mode=account` 复用已有账号；`sample` 的 WARP 部分是不可连接样例；`external-only` 只生成外部 provider，不需要账号或 Secret
-5. `include_external_nodes` 默认勾选：account/sample 同时输出 MASQUE + 外部节点组合配置和独立 `external-direct.yaml`。取消后为纯 WARP；external-only 始终只输出独立配置
-6. 想持久保存时选择 `output_destination=repository`，并自行勾选 `confirm_publish_outputs`：确认将可能含私钥的配置提交到本仓库。这一项默认不勾选，sample 和 external-only 发布也要确认
-7. 由你自己点击 Run workflow。成功后，`publish` 任务会将白名单文件提交至所选分支；内容相同不产生新提交。随后在仓库 `outputs/` 打开所需文件，点 Raw 复制实际链接
+1. 先确认运行的分支已包含本版工作流。PR 未合并时 `main` 仍可能是旧注册流程，不能把旧按钮当作新流程；合并与运行是两次独立操作
+2. 由你自己在 GitHub 设置已有账号的 Actions Secret `WARP_ACCOUNT_JSON`，以及 Actions Variable `WARP_GENERATION_ENABLED=true`；不要把 JSON 发到聊天、Issue 或源码中
+3. 打开 Actions → `生成 WARP MASQUE 配置` → Run workflow，选含新版代码的目标分支与 `mode=account`；`sample` 只用于不可连接的 WARP 样例
+4. `include_external_nodes` 默认勾选，生成上述三套完整配置；取消只生成纯 WARP
+5. 要持久保存则选 `output_destination=repository`，并自行勾选默认关闭的 `confirm_publish_outputs`，确认将可能含私钥的配置提交到本仓库。sample 发布也要确认
+6. 由你自己点击 Run workflow。成功后 publish 任务提交三份 YAML 与 manifest，内容相同不产生新提交；在所选分支的 outputs/ 打开文件，点 Raw 复制实际链接
 
-不需要你手动上传生成文件。公开账号模式必须选择 repository 并逐次确认；`account + artifact` 仍要求私有仓库和 `confirm_private_artifact`。Secret 缺失、门禁未通过或账号格式错误都会停止，不会注册替代账号。每次都需新的 Run workflow 请求，**Re-run jobs / Re-run failed jobs 被拒绝**；失败后检查原因再新开一次运行。
+不需要手动上传生成文件。公开账号模式必须选 repository 并逐次确认；account + artifact 仍需私有仓库和 `confirm_private_artifact`。Secret 缺失、门禁失败或账号无效会停止，不注册替代账号。每次必须新开 Run workflow；**Re-run jobs / Re-run failed jobs 被拒绝**，应检查原因后重新选择和确认。
 
-默认 account + 外部节点开关生成并提交：
+发布只保留本次导出，移除这次不再生成的已知旧产物，包括旧 external/provider/link/bridge 文件。sample 会替换当前真实配置，取消第三方选项会移除当前两份中转配置；**旧版本及私钥仍在 Git 历史中**。本地 CLI 不做清理。
 
-- `outputs/warp-masque.yaml`：完整 MASQUE + 外部 provider 配置
-- `outputs/warp-masque-provider.yaml`：MASQUE 节点 provider
-- `outputs/warp-masque-shadowrocket.txt`：MASQUE 链接
-- `outputs/external-direct.yaml`：独立非 MASQUE 第三方 provider 配置
-- `outputs/manifest.json`：生成文件清单
+发布先取远端最新分支为父提交，只改受限的 outputs 路径；并发更新或分支保护拒绝就停止，不强推。仅 publish 任务请求短期 `contents: write`，GitHub 不能把此权限细分到目录，目录限制由白名单实现。生成任务只读，原始账号 JSON、token、环境、日志和缓存不发布。
 
-external-only 只保留最后两项。配置可选的本地桥接输出见 [详细说明](docs/offline-generator.md)，手动工作流默认不生成。发布只保留本次生成的白名单文件，会移除以前已跟踪、这次不再生成的白名单文件；所以 sample 会替换所选分支的真实配置，external-only 会移除当前 MASQUE 文件，**旧版本仍在 Git 历史中**。本地 CLI 不做这个清理。
-
-发布时使用最新远端分支为父提交，保留其他路径的变更，拒绝符号链接和非白名单文件；发生并发更新/分支保护拒绝就停止，不强推、不自动绕过。只有 publish 任务有短期 `contents: write` 权限；GitHub 的这一权限不能限制到目录，目录限制由发布器白名单实施。生成任务只读，原始账号 JSON、token、环境、日志、缓存都不纳入发布。
-
-生成结果仍先经 1 天 artifact 传给发布任务，仅含同一组校验后的文件。公开发布失败时请留意这份临时下载也可能含私钥；不要因 push 失败就认为配置没有离开运行器。本次仅提供流程代码，不会自动配置 Secret、更改可见性/仓库权限或替你触发真实账号运行。更多排错见 [发布说明](docs/manual-publication.md)。
+结果经 1 天 artifact 传给发布任务；即使公开 push 失败，这份临时下载仍可能含私钥，不能认为配置没有离开运行器。本次仅提供代码，不自动配置 Secret、更改可见性/仓库权限或替你触发真实账号运行。详见 [手动发布说明](docs/manual-publication.md)。
 
 ## 先验证，不写文件
 

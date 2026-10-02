@@ -285,6 +285,8 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual(set(workflow["on"]), {"workflow_dispatch"})
         self.assertEqual(workflow["permissions"], {"contents": "read"})
         self.assertNotIn("usque register", text)
+        self.assertIn("scripts/generate_bundle.py", text)
+        self.assertNotIn("scripts/generate.py", text)
         inputs = workflow["on"]["workflow_dispatch"]["inputs"]
         self.assertEqual(inputs["output_destination"]["default"], "artifact")
         self.assertEqual(inputs["confirm_publish_outputs"]["default"], "false")
