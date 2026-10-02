@@ -22,7 +22,7 @@ python scripts/generate.py --account /安全目录/usque-config.json --settings 
 
 默认 8 个候选地址 × 7 个端口，共 56 个节点；去掉原来重复地址的官方域名别名。它们复用同一个账号，**不代表 56 个账号、国家或不同出口**。本生成器不会探测入口，也不保证服务解锁或当前可用性。
 
-输出含私钥，请保存在私有位置。生成器不复制原始账号文件、设备 ID 或 access token，也不会把文件提交到 Git。POSIX 系统上输出目录为 `0700`，文件为 `0600`；Windows 请另外检查访问权限。
+输出含私钥，默认请保存在私有位置。生成器不复制原始账号文件、设备 ID 或 access token，CLI 本身不提交 Git；下面的手动 Actions 发布选项会在逐次确认后提交生成文件。POSIX 系统上输出目录为 `0700`，文件为 `0600`；Windows 请另外检查访问权限。
 
 ## 同时输出非 MASQUE 节点配置
 
@@ -51,19 +51,35 @@ python scripts/generate.py --external-only --settings examples/external-provider
 
 完整示例、优先级、H2 及多格式边界见 [使用与迁移说明](docs/offline-generator.md)。
 
-## GitHub Actions
+## GitHub Actions：下载或手动提交 outputs
 
-`生成 WARP MASQUE 配置` 现在是**手动触发、复用账号**的工作流，没有定时任务。
+`生成 WARP MASQUE 配置` 仅由你手动点 **Run workflow** 触发，没有定时任务。默认 `output_destination=artifact`，只提供保留 1 天的下载；选择 `repository` 才会生成并提交到本次选中分支的 `outputs/`。
 
-1. `mode=sample`：公开或私有仓库都能测试，WARP 部分只使用仓库里的无效合成密钥，不能连接
-2. `mode=external-only`：只生成第三方非 MASQUE 节点 provider 配置，无需账号或 Secret
-3. `mode=account`：必须是**私有仓库**，已由仓库所有者设置 `WARP_GENERATION_ENABLED=true`，并由其自行安全配置已有账号 Secret `WARP_ACCOUNT_JSON`
-4. 真实账号运行时还必须勾选确认：私有仓库成员可下载含私钥的产物
-5. 配置写入运行器 `outputs/`，以 artifact 提供下载，保留 1 天；不会提交回仓库或上传原始账号 JSON
+**公开风险：真实 MASQUE 完整配置、provider 和 Shadowrocket 链接含同一个账号的私钥。提交到公开仓库后，任何人都可能复制和使用；Git 历史、fork、下载和缓存不能保证清除。删除文件或改回 artifact 不会撤销已公开的密钥。** 不接受这点时，请使用私有仓库的 artifact 模式。
 
-`include_external_nodes` 默认勾选，对应同时生成两类配置；取消后恢复纯 WARP 输出。CLI 不带 external 设置时仍保持原来的纯 WARP 默认值。
+1. 先确认运行的分支已包含本版工作流。此改动在 PR 中时，默认 `main` 仍可能是旧注册流程，不能把旧按钮当作新流程；合并与运行是两次独立操作
+2. 真实账号需由你自己在 GitHub 配置已有账号的 Actions Secret `WARP_ACCOUNT_JSON`，以及 Actions Variable `WARP_GENERATION_ENABLED=true`。不创建新账号，不把 JSON 发到聊天、Issue 或源码中
+3. 打开 Actions → `生成 WARP MASQUE 配置` → Run workflow，选择含新版代码的目标分支
+4. `mode=account` 复用已有账号；`sample` 的 WARP 部分是不可连接样例；`external-only` 只生成外部 provider，不需要账号或 Secret
+5. `include_external_nodes` 默认勾选：account/sample 同时输出 MASQUE + 外部节点组合配置和独立 `external-direct.yaml`。取消后为纯 WARP；external-only 始终只输出独立配置
+6. 想持久保存时选择 `output_destination=repository`，并自行勾选 `confirm_publish_outputs`：确认将可能含私钥的配置提交到本仓库。这一项默认不勾选，sample 和 external-only 发布也要确认
+7. 由你自己点击 Run workflow。成功后，`publish` 任务会将白名单文件提交至所选分支；内容相同不产生新提交。随后在仓库 `outputs/` 打开所需文件，点 Raw 复制实际链接
 
-当前公开仓库不满足真实账号生成条件。改变可见性或配置 Secret 是独立的账号设置步骤，不是合并代码就会执行的操作。不要将真实账号放进源码、Issue、PR、日志或聊天。
+不需要你手动上传生成文件。公开账号模式必须选择 repository 并逐次确认；`account + artifact` 仍要求私有仓库和 `confirm_private_artifact`。Secret 缺失、门禁未通过或账号格式错误都会停止，不会注册替代账号。每次都需新的 Run workflow 请求，**Re-run jobs / Re-run failed jobs 被拒绝**；失败后检查原因再新开一次运行。
+
+默认 account + 外部节点开关生成并提交：
+
+- `outputs/warp-masque.yaml`：完整 MASQUE + 外部 provider 配置
+- `outputs/warp-masque-provider.yaml`：MASQUE 节点 provider
+- `outputs/warp-masque-shadowrocket.txt`：MASQUE 链接
+- `outputs/external-direct.yaml`：独立非 MASQUE 第三方 provider 配置
+- `outputs/manifest.json`：生成文件清单
+
+external-only 只保留最后两项。配置可选的本地桥接输出见 [详细说明](docs/offline-generator.md)，手动工作流默认不生成。发布只保留本次生成的白名单文件，会移除以前已跟踪、这次不再生成的白名单文件；所以 sample 会替换所选分支的真实配置，external-only 会移除当前 MASQUE 文件，**旧版本仍在 Git 历史中**。本地 CLI 不做这个清理。
+
+发布时使用最新远端分支为父提交，保留其他路径的变更，拒绝符号链接和非白名单文件；发生并发更新/分支保护拒绝就停止，不强推、不自动绕过。只有 publish 任务有短期 `contents: write` 权限；GitHub 的这一权限不能限制到目录，目录限制由发布器白名单实施。生成任务只读，原始账号 JSON、token、环境、日志、缓存都不纳入发布。
+
+生成结果仍先经 1 天 artifact 传给发布任务，仅含同一组校验后的文件。公开发布失败时请留意这份临时下载也可能含私钥；不要因 push 失败就认为配置没有离开运行器。本次仅提供流程代码，不会自动配置 Secret、更改可见性/仓库权限或替你触发真实账号运行。更多排错见 [发布说明](docs/manual-publication.md)。
 
 ## 先验证，不写文件
 

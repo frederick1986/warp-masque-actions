@@ -279,25 +279,30 @@ class GeneratorTests(unittest.TestCase):
             for path in (Path(temporary) / "generate.py").iterdir():
                 self.assertEqual(path.read_bytes(), (Path(temporary) / "gen_masque.py" / path.name).read_bytes())
 
-    def test_workflow_has_no_registration_schedule_or_public_account_upload(self):
+    def test_workflow_has_manual_confirmation_and_isolated_publisher(self):
         text = (ROOT / ".github/workflows/warp-masque.yml").read_text()
         workflow = yaml.load(text, Loader=yaml.BaseLoader)
         self.assertEqual(set(workflow["on"]), {"workflow_dispatch"})
         self.assertEqual(workflow["permissions"], {"contents": "read"})
         self.assertNotIn("usque register", text)
-        self.assertNotIn("git push", text)
+        inputs = workflow["on"]["workflow_dispatch"]["inputs"]
+        self.assertEqual(inputs["output_destination"]["default"], "artifact")
+        self.assertEqual(inputs["confirm_publish_outputs"]["default"], "false")
+        self.assertEqual(inputs["confirm_private_artifact"]["default"], "false")
+        self.assertEqual(workflow["concurrency"]["cancel-in-progress"], "false")
         steps = workflow["jobs"]["generate"]["steps"]
-        self.assertNotIn("secrets.", str(steps[0]))
-        gate = steps[0]["run"]
-        for private, enabled, confirmed, expected in (("false", "true", "true", 1), ("true", "false", "true", 1), ("true", "true", "false", 1), ("true", "true", "true", 0)):
-            result = subprocess.run(["bash", "-c", gate], env={**os.environ, "REPOSITORY_PRIVATE": private, "GENERATION_ENABLED": enabled, "CONFIRMED": confirmed}, capture_output=True)
-            self.assertEqual(result.returncode, expected)
-        account_step = next(step for step in steps if "WARP_ACCOUNT_JSON" in step.get("env", {}))
-        upload_step = next(step for step in steps if "upload-artifact" in step.get("uses", ""))
-        for step in (account_step, upload_step):
-            self.assertIn("github.event.repository.private", step["if"])
-            self.assertIn("vars.WARP_GENERATION_ENABLED", step["if"])
-            self.assertIn("inputs.confirm_private_artifact", step["if"])
+        gate_index = next(i for i, step in enumerate(steps) if step.get("run") == "python scripts/workflow_gate.py")
+        account_index = next(i for i, step in enumerate(steps) if "WARP_ACCOUNT_JSON" in step.get("env", {}))
+        self.assertLess(gate_index, account_index)
+        self.assertNotIn("secrets.", str(steps[:account_index]))
+        upload_index = next(i for i, step in enumerate(steps) if "upload-artifact" in step.get("uses", ""))
+        self.assertIn("validate_outputs", steps[upload_index - 1]["run"])
+        publisher = workflow["jobs"]["publish"]
+        self.assertEqual(publisher["needs"], "generate")
+        self.assertEqual(publisher["permissions"], {"contents": "write"})
+        self.assertIn("inputs.confirm_publish_outputs", publisher["if"])
+        self.assertIn("github.run_attempt == 1", publisher["if"])
+        self.assertNotIn("secrets.WARP_ACCOUNT_JSON", str(publisher))
 
 
 if __name__ == "__main__":

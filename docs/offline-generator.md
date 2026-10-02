@@ -98,7 +98,7 @@ rules:
 - 默认不启用外部控制接口，也不包含 Worker UI。代理和 DNS 监听均限本机
 - `Shadowrocket .txt` 沿用主项目链接方言，只表示 endpoint / port / keys / IPv4 / DNS / UDP；不会无依据地声称 SNI、MTU、自定义规则已转换到该格式。对这些配置有要求时使用已验证支持的 Mihomo YAML
 - 原有 Opera / Proton / Windscribe / Worker 未整合进默认流程，也没有改变其生产设置或历史文件
-- 没有添加调度周期、自动提交或最近三版快照；以后可独立决定是否需要
+- 没有添加调度周期或最近三版快照；可选手动 Actions 发布在逐次确认后提交 outputs，见 [发布说明](manual-publication.md)
 
 ## 验证范围
 
@@ -107,7 +107,7 @@ python -m unittest discover -s tests -v
 python -m compileall -q scripts tests
 ```
 
-离线测试覆盖输入校验、双栈去重、账号复用、AI 和 CIDR 的实际规则、完整配置与 provider 一致、URI 编码、loopback 桥接、私有文件权限、日志脱敏、兼容入口及 Actions 私有仓库门禁。
+离线测试覆盖输入校验、双栈去重、账号复用、AI 和 CIDR 的实际规则、完整配置与 provider 一致、URI 编码、loopback 桥接、私有文件权限、日志脱敏、兼容入口、Actions 逐次确认门禁和受限输出发布。
 
 可选内核测试需自己已有可信来源的 Mihomo 可执行文件以及 OpenSSL：
 

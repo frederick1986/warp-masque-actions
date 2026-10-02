@@ -12,36 +12,49 @@ on:
         description: 同时生成第三方非 MASQUE 节点配置（客户端运行时下载公开订阅）
         type: boolean
         default: true
+      output_destination:
+        description: artifact 下载保留 1 天；repository 永久提交到本次选择分支的 outputs
+        type: choice
+        options: [artifact, repository]
+        default: artifact
+      confirm_publish_outputs:
+        description: 确认将可能含私钥的配置提交到本仓库；公开仓库任何人可获取，历史无法保证清除
+        type: boolean
+        default: false
       confirm_private_artifact:
-        description: 已确认私有仓库成员可下载含私钥的配置
+        description: 仅 artifact 账号模式：已确认私有仓库成员可下载含私钥的配置
         type: boolean
         default: false
 
-# No repository writes, registration, deployment, schedule, or automatic commits.
+# No registration, deployment, schedule, or automatic triggers.
 permissions:
   contents: read
+
+# Serialize all output writers. Never cancel an in-progress publication.
+concurrency:
+  group: warp-generated-outputs-${{ github.repository }}
+  cancel-in-progress: false
 
 jobs:
   generate:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Require private repository and explicit account setup
-        if: inputs.mode == 'account'
-        env:
-          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
-          GENERATION_ENABLED: ${{ vars.WARP_GENERATION_ENABLED }}
-          CONFIRMED: ${{ inputs.confirm_private_artifact }}
-        run: |
-          if [ "$REPOSITORY_PRIVATE" != "true" ] || [ "$GENERATION_ENABLED" != "true" ] || [ "$CONFIRMED" != "true" ]; then
-            echo "::error::Account generation requires a private repository, WARP_GENERATION_ENABLED=true, and artifact confirmation."
-            exit 1
-          fi
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      - name: Require a new explicit manual request before accessing account secrets
+        env:
+          GENERATION_MODE: ${{ inputs.mode }}
+          OUTPUT_DESTINATION: ${{ inputs.output_destination }}
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+          GENERATION_ENABLED: ${{ vars.WARP_GENERATION_ENABLED }}
+          CONFIRM_PRIVATE_ARTIFACT: ${{ inputs.confirm_private_artifact }}
+          CONFIRM_PUBLISH_OUTPUTS: ${{ inputs.confirm_publish_outputs }}
+        run: python scripts/workflow_gate.py
       - run: python -m pip install -r requirements.txt
       - name: Generate nonfunctional sample
         if: inputs.mode == 'sample'
@@ -50,24 +63,61 @@ jobs:
         run: |
           SETTINGS=examples/synthetic.json
           if [ "$INCLUDE_EXTERNAL_NODES" = "true" ]; then SETTINGS=examples/external-providers.json; fi
-          python scripts/generate.py --account tests/fixtures/synthetic-account.json --settings "$SETTINGS" --output outputs
+          python scripts/generate.py --account tests/fixtures/synthetic-account.json --settings "$SETTINGS" --output "$RUNNER_TEMP/warp-exports"
       - name: Generate external-node configuration without account input
         if: inputs.mode == 'external-only'
-        run: python scripts/generate.py --external-only --settings examples/external-providers.json --output outputs
+        run: python scripts/generate.py --external-only --settings examples/external-providers.json --output "$RUNNER_TEMP/warp-exports"
       - name: Reuse existing account (no registration)
-        if: inputs.mode == 'account' && github.event.repository.private && vars.WARP_GENERATION_ENABLED == 'true' && inputs.confirm_private_artifact
+        if: inputs.mode == 'account'
         env:
           WARP_ACCOUNT_JSON: ${{ secrets.WARP_ACCOUNT_JSON }}
           INCLUDE_EXTERNAL_NODES: ${{ inputs.include_external_nodes }}
         run: |
           SETTINGS=examples/generator.json
           if [ "$INCLUDE_EXTERNAL_NODES" = "true" ]; then SETTINGS=examples/external-providers.json; fi
-          python scripts/generate.py --account-env WARP_ACCOUNT_JSON --settings "$SETTINGS" --output outputs
-      - name: Upload generated files
-        if: success() && (inputs.mode == 'sample' || inputs.mode == 'external-only' || (github.event.repository.private && vars.WARP_GENERATION_ENABLED == 'true' && inputs.confirm_private_artifact))
+          python scripts/generate.py --account-env WARP_ACCOUNT_JSON --settings "$SETTINGS" --output "$RUNNER_TEMP/warp-exports"
+      - name: Validate exact generated-file allowlist before any upload
+        run: |
+          PYTHONPATH=scripts python -c 'import os; from pathlib import Path; from publish_outputs import validate_outputs; validate_outputs(Path(os.environ["RUNNER_TEMP"]) / "warp-exports")'
+      - name: Upload validated files (also used for isolated publication job)
         uses: actions/upload-artifact@v6
         with:
           name: warp-masque-${{ inputs.mode }}
-          path: outputs/
+          path: ${{ runner.temp }}/warp-exports/
           retention-days: 1
           if-no-files-found: error
+          include-hidden-files: false
+      - name: Remove temporary generated files
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/warp-exports"
+
+  publish:
+    needs: generate
+    if: inputs.output_destination == 'repository' && inputs.confirm_publish_outputs && github.event_name == 'workflow_dispatch' && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # GitHub cannot scope contents:write to a directory. The publisher enforces
+    # an exact outputs/ file allowlist; this short-lived token exists only here.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Execute the reviewed scripts from this run, not newer remote code.
+          ref: ${{ github.sha }}
+          persist-credentials: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v7
+        with:
+          name: warp-masque-${{ inputs.mode }}
+          path: ${{ runner.temp }}/warp-exports
+      - name: Publish only validated outputs on the latest selected branch
+        env:
+          TARGET_BRANCH: ${{ github.ref_name }}
+          CONFIRM_PUBLISH_OUTPUTS: ${{ inputs.confirm_publish_outputs }}
+        run: python scripts/publish_outputs.py --source "$RUNNER_TEMP/warp-exports" --branch "$TARGET_BRANCH"
+      - name: Remove temporary generated files
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/warp-exports"
