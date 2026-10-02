@@ -1,0 +1,19 @@
+{
+  "endpoint_source": "curated",
+  "family": "dual",
+  "ports": [443, 500, 1701, 4500, 4443, 8443, 8095],
+  "sni": "consumer-masque.cloudflareclient.com",
+  "mtu": 1280,
+  "dns": ["1.1.1.1", "2606:4700:4700::1111"],
+  "remote_dns": true,
+  "network": "quic",
+  "max_nodes": 500,
+  "ruleset_profile": "acl4ssr",
+  "chatgpt_route": "AI",
+  "other_ai_route": "AI",
+  "custom_ip_rules": [],
+  "ai_health_url": null,
+  "health_url": "https://www.gstatic.com/generate_204",
+  "health_interval": 300,
+  "formats": ["mihomo", "provider", "shadowrocket"]
+}

@@ -1,0 +1,43 @@
+name: Test offline generator
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/**'
+      - 'tests/**'
+      - 'examples/**'
+      - 'requirements.txt'
+      - '.github/workflows/warp-masque.yml'
+      - '.github/workflows/test-generator.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install -r requirements.txt
+      - name: Download pinned Mihomo for synthetic syntax checks
+        if: matrix.python-version == '3.12'
+        run: |
+          mkdir -p "$RUNNER_TEMP/warp-validation"
+          curl --fail --location --silent --show-error --retry 2 --connect-timeout 10 --max-time 120 \
+            https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-amd64-v1.19.32.gz \
+            --output "$RUNNER_TEMP/warp-validation/mihomo.gz"
+          echo "8451100836c9eda194331c2babfad490b2faf30cebc1a04b0e76fd8ac2d35d10  $RUNNER_TEMP/warp-validation/mihomo.gz" | sha256sum --check --status
+          gzip -dc "$RUNNER_TEMP/warp-validation/mihomo.gz" > "$RUNNER_TEMP/warp-validation/mihomo"
+          chmod 700 "$RUNNER_TEMP/warp-validation/mihomo"
+          echo "MIHOMO_BIN=$RUNNER_TEMP/warp-validation/mihomo" >> "$GITHUB_ENV"
+      - run: python -m unittest discover -s tests -v
+      - run: python scripts/generate.py --account tests/fixtures/synthetic-account.json --settings examples/synthetic.json --check

@@ -1,0 +1,12 @@
+{
+  "ruleset_profile": "acl4ssr",
+  "chatgpt_route": "AI",
+  "other_ai_route": "AI",
+  "external_providers": {
+    "enabled": true,
+    "countries": ["US", "JP", "SG"],
+    "use_warp": false,
+    "scope": "ai-streaming",
+    "protocol_mode": "stable"
+  }
+}

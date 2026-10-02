@@ -3,79 +3,118 @@ name: 生成 WARP MASQUE 配置
 on:
   workflow_dispatch:
     inputs:
-      device_name:
-        description: 设备名（WARP 后台显示用）
-        required: false
-        default: gh-actions
-      retention_days:
-        description: artifact 保留天数
-        required: false
-        default: '7'
+      mode:
+        description: sample 是无效账号样例；account 复用已有 WARP 账号
+        type: choice
+        options: [sample, account]
+        default: sample
+      include_external_nodes:
+        description: 下载 donor 第三方节点，生成纯 WARP、原项目中转、合并三份完整配置
+        type: boolean
+        default: true
+      output_destination:
+        description: artifact 下载保留 1 天；repository 永久提交到本次选择分支的 outputs
+        type: choice
+        options: [artifact, repository]
+        default: artifact
+      confirm_publish_outputs:
+        description: 确认将可能含私钥的配置提交到本仓库；公开仓库任何人可获取，历史无法保证清除
+        type: boolean
+        default: false
+      confirm_private_artifact:
+        description: 仅 artifact 账号模式：已确认私有仓库成员可下载含私钥的配置
+        type: boolean
+        default: false
 
+# No registration, deployment, schedule, or automatic triggers.
 permissions:
   contents: read
+
+# Serialize all output writers. Never cancel an in-progress publication.
+concurrency:
+  group: warp-generated-outputs-${{ github.repository }}
+  cancel-in-progress: false
 
 jobs:
   generate:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
-
-      - name: 下载 usque
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Require a new explicit manual request before accessing account secrets
+        env:
+          GENERATION_MODE: ${{ inputs.mode }}
+          OUTPUT_DESTINATION: ${{ inputs.output_destination }}
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+          GENERATION_ENABLED: ${{ vars.WARP_GENERATION_ENABLED }}
+          CONFIRM_PRIVATE_ARTIFACT: ${{ inputs.confirm_private_artifact }}
+          CONFIRM_PUBLISH_OUTPUTS: ${{ inputs.confirm_publish_outputs }}
+        run: python scripts/workflow_gate.py
+      - run: python -m pip install -r requirements.txt
+      - name: Generate nonfunctional sample
+        if: inputs.mode == 'sample'
+        env:
+          INCLUDE_EXTERNAL_NODES: ${{ inputs.include_external_nodes }}
         run: |
-          set -euo pipefail
-          VER=$(curl -sL https://api.github.com/repos/Diniboy1123/usque/releases/latest \
-                | jq -r '.tag_name' | sed 's/^v//')
-          echo "usque 版本 $VER"
-          curl -sL -o usque.zip \
-            "https://github.com/Diniboy1123/usque/releases/download/v${VER}/usque_${VER}_linux_amd64.zip"
-          unzip -oq usque.zip
-          chmod +x usque
-          # 没有 config.json 时 usque version 会先打一条 error，不影响结果
-          ./usque version 2>/dev/null | grep -i version || true
-
-      - name: 注册设备并生成密钥
+          EXTRA=()
+          if [ "$INCLUDE_EXTERNAL_NODES" != "true" ]; then EXTRA+=(--no-external); fi
+          python scripts/generate_bundle.py --account tests/fixtures/synthetic-account.json --settings examples/external-providers.json --output "$RUNNER_TEMP/warp-exports" "${EXTRA[@]}"
+      - name: Reuse existing account (no registration)
+        if: inputs.mode == 'account'
+        env:
+          WARP_ACCOUNT_JSON: ${{ secrets.WARP_ACCOUNT_JSON }}
+          INCLUDE_EXTERNAL_NODES: ${{ inputs.include_external_nodes }}
         run: |
-          set -euo pipefail
-          ./usque register -a -n "${{ github.event.inputs.device_name || 'gh-actions' }}"
-          test -s config.json
-          # 只打印非敏感字段，密钥不进日志
-          python3 - <<'PY'
-          import json
-          c = json.load(open("config.json"))
-          print("endpoint_v4 =", c["endpoint_v4"])
-          print("endpoint_v6 =", c["endpoint_v6"])
-          print("内网地址 =", c["ipv4"], "/", c["ipv6"])
-          PY
-
-      - name: 生成 mihomo 配置
-        run: python3 scripts/gen_masque.py config.json dist
-
-      - name: 校验配置可加载
+          EXTRA=()
+          if [ "$INCLUDE_EXTERNAL_NODES" != "true" ]; then EXTRA+=(--no-external); fi
+          python scripts/generate_bundle.py --account-env WARP_ACCOUNT_JSON --settings examples/external-providers.json --output "$RUNNER_TEMP/warp-exports" "${EXTRA[@]}"
+      - name: Validate exact generated-file allowlist before any upload
         run: |
-          set -euo pipefail
-          URL=$(curl -sL https://api.github.com/repos/MetaCubeX/mihomo/releases \
-                | grep -o 'https://[^"]*mihomo-linux-amd64-alpha[^"]*\.gz' | head -1)
-          curl -sL -o mihomo.gz "$URL"
-          gunzip -f mihomo.gz
-          chmod +x mihomo
-          mkdir -p check
-          cp dist/warp-masque.yaml check/config.yaml
-          # -t 只做配置解析校验，不起服务
-          ./mihomo -t -d check
-          echo "配置校验通过"
-
-      - name: 打包凭据与配置
-        run: |
-          cp config.json dist/usque-config.json
-          test -s dist/warp-masque.yaml
-          test -s dist/warp-masque-shadowrocket.txt
-          ls -l dist
-
-      - name: 上传 artifact
+          PYTHONPATH=scripts python -c 'import os; from pathlib import Path; from publish_outputs import validate_outputs; validate_outputs(Path(os.environ["RUNNER_TEMP"]) / "warp-exports")'
+      - name: Upload validated files (also used for isolated publication job)
         uses: actions/upload-artifact@v6
         with:
-          name: warp-masque-config
-          path: dist/
-          retention-days: ${{ github.event.inputs.retention_days || 7 }}
+          name: warp-masque-${{ inputs.mode }}
+          path: ${{ runner.temp }}/warp-exports/
+          retention-days: 1
           if-no-files-found: error
+          include-hidden-files: false
+      - name: Remove temporary generated files
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/warp-exports"
+
+  publish:
+    needs: generate
+    if: inputs.output_destination == 'repository' && inputs.confirm_publish_outputs && github.event_name == 'workflow_dispatch' && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # GitHub cannot scope contents:write to a directory. The publisher enforces
+    # an exact outputs/ file allowlist; this short-lived token exists only here.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Execute the reviewed scripts from this run, not newer remote code.
+          ref: ${{ github.sha }}
+          persist-credentials: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v7
+        with:
+          name: warp-masque-${{ inputs.mode }}
+          path: ${{ runner.temp }}/warp-exports
+      - name: Publish only validated outputs on the latest selected branch
+        env:
+          TARGET_BRANCH: ${{ github.ref_name }}
+          CONFIRM_PUBLISH_OUTPUTS: ${{ inputs.confirm_publish_outputs }}
+        run: python scripts/publish_outputs.py --source "$RUNNER_TEMP/warp-exports" --branch "$TARGET_BRANCH"
+      - name: Remove temporary generated files
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/warp-exports"
